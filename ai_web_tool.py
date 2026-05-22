@@ -16,46 +16,53 @@ session.headers.update({
 })
 
 # -------------------------- Streamlit 页面配置 --------------------------
-st.set_page_config(page_title="智谱AI问答工具", page_icon="🤖", layout="wide")
-st.title("🤖 我的专属AI问答小工具")
+st.set_page_config(page_title="智谱多轮对话机器人", page_icon="🤖", layout="wide")
+st.title("🤖 我的专属连续对话AI机器人")
 st.divider()
 
-# 获取用户输入
-user_input = st.text_input(
-    "请输入你想问的问题：",
-    placeholder="比如：帮我写一条朋友圈文案、解释一下Python的装饰器",
-    max_chars=2000
-)
+# ========== 新增：初始化对话记忆 ==========
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# 点击按钮触发AI调用
-if st.button("生成回答", type="primary", use_container_width=True):
-    if not user_input.strip():
-        st.warning("⚠️ 请先输入你的问题哦！")
-    else:
-        # 流式输出容器（实时显示AI回答）
-        answer_container = st.empty()
-        full_answer = ""
-        
+# ========== 新增：展示历史所有聊天记录 ==========
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# ========== 聊天式输入框（替换原单行输入，更自然） ==========
+user_input = st.chat_input("请输入问题，和AI连续聊天，AI会记住上下文...")
+
+# 触发AI对话
+if user_input:
+    # 1. 保存用户消息到记忆并展示
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # 2. AI流式回复
+    answer_container = st.empty()
+    full_answer = ""
+
+    with st.chat_message("assistant"):
         with st.spinner("AI正在思考中..."):
             try:
-                # 构造请求体（兼容OpenAI格式）
+                # 把【全部历史对话】传给智谱，实现记忆
                 data = {
                     "model": MODEL_NAME,
-                    "messages": [{"role": "user", "content": user_input}],
-                    "stream": True,  # 开启流式输出，解决卡顿延迟
+                    "messages": st.session_state.messages,
+                    "stream": True,  # 保持流式输出
                     "max_tokens": 2048,
                     "temperature": 0.7
                 }
 
-                # 发送请求
                 response = session.post(
                     BASE_URL,
                     json=data,
-                    timeout=(10, 60)  # 连接超时10秒，读取超时60秒
+                    timeout=(10, 60)
                 )
-                response.raise_for_status()  # 提前捕获HTTP错误（401/403/500等）
+                response.raise_for_status()
 
-                # 逐行解析流式响应，实时显示
+                # 逐行解析流式响应
                 for line in response.iter_lines(decode_unicode=True):
                     if not line or line.startswith(":"):
                         continue
@@ -74,7 +81,8 @@ if st.button("生成回答", type="primary", use_container_width=True):
                     except json.JSONDecodeError:
                         continue
 
-                # 生成完成提示
+                # 3. 保存AI回答到记忆
+                st.session_state.messages.append({"role": "assistant", "content": full_answer})
                 st.success("✅ 回答生成完成！")
 
             except requests.exceptions.ConnectionError:
@@ -91,6 +99,11 @@ if st.button("生成回答", type="primary", use_container_width=True):
             except Exception as e:
                 st.error(f"❌ 程序运行出错：{str(e)}")
 
+# ========== 新增：清空对话按钮 ==========
+if st.button("🗑️ 清空对话历史", type="secondary", use_container_width=True):
+    st.session_state.messages = []
+    st.rerun()
+
 # 底部提示
 st.divider()
-st.caption("💡 提示：使用智谱AI glm-4.5-flash 模型，永久免费无调用门槛，支持流式输出不卡顿")
+st.caption("💡 提示：使用智谱AI glm-4.5-flash 模型，支持多轮上下文记忆+流式实时输出")
