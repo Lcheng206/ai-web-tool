@@ -1,8 +1,10 @@
 import streamlit as st
 import requests
 import json
+import PyPDF2
+from io import BytesIO
 
-# -------------------------- 核心配置（你的智谱信息，不用改） --------------------------
+# -------------------------- 核心配置 --------------------------
 API_KEY = "e5f5f77520db4c1fb1298ff8006ce6f5.ZZjfpgRXAqbqBOyz"
 BASE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 MODEL_NAME = "glm-4.5-flash"
@@ -15,8 +17,24 @@ session.headers.update({
     "Accept-Encoding": "gzip, deflate"
 })
 
+# -------------------------- 文档解析工具函数 --------------------------
+def extract_text_from_pdf(pdf_file):
+    """提取PDF全部文本"""
+    pdf_reader = PyPDF2.PdfReader(BytesIO(pdf_file.read()))
+    full_text = ""
+    for page in pdf_reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            full_text += page_text + "\n"
+    return full_text
+
+def split_text(text, chunk_size=1000):
+    """长文本简单切片，防止上下文溢出"""
+    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    return chunks
+
 # -------------------------- Streamlit 页面配置+美化 --------------------------
-st.set_page_config(page_title="专属人设AI助手", page_icon="✨", layout="wide")
+st.set_page_config(page_title="文档问答AI助手", page_icon="📄", layout="wide")
 st.markdown("""
 <style>
     .main {background-color: #f7f9fc;}
@@ -24,19 +42,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("✨ 我的专属人设AI助手")
+st.title("📄 专属文档问答AI助手")
 st.divider()
 
-# ========== 侧边栏：人设设置面板 ==========
+# ========== 侧边栏：人设 + 文件上传 面板 ==========
 with st.sidebar:
-    st.header("⚙️ AI人设设置")
-    # 预设角色
+    st.header("⚙️ 功能设置")
+    # 1. AI人设选择
     role_choice = st.selectbox(
         "选择AI身份",
         ["通用智能助手", "幽默聊天搭子", "专业文案写手", "学习答疑老师", "职场顾问", "自定义人设"]
     )
 
-    # 预设系统提示词
     role_prompt_dict = {
         "通用智能助手": "你是友好、简洁、专业的AI助手，回答通俗易懂。",
         "幽默聊天搭子": "你是风趣幽默、爱开玩笑的聊天搭子，语气轻松活泼。",
@@ -48,34 +65,63 @@ with st.sidebar:
 
     system_prompt = role_prompt_dict[role_choice]
     if role_choice == "自定义人设":
-        system_prompt = st.text_area("自定义你的AI人设：", placeholder="例如：你是温柔的情感陪伴者...", height=120)
+        system_prompt = st.text_area("自定义你的AI人设：", placeholder="例如：你是专业文档解读专员...", height=120)
 
     st.divider()
-    st.info("💡 切换人设后请清空对话，重新开始对话生效")
+    # 2. 文件上传区域
+    st.subheader("📁 上传文档 (PDF/TXT)")
+    uploaded_file = st.file_uploader("选择文件", type=["pdf", "txt"])
+
+    # 解析并保存文档内容
+    if uploaded_file:
+        with st.spinner("正在解析文档..."):
+            if uploaded_file.name.endswith(".pdf"):
+                doc_text = extract_text_from_pdf(uploaded_file)
+            else:
+                doc_text = uploaded_file.read().decode("utf-8", errors="ignore")
+            
+            # 文本切片
+            doc_chunks = split_text(doc_text)
+            st.session_state["doc_content"] = doc_chunks
+            st.success(f"✅ 解析完成！共 {len(doc_chunks)} 个文本片段")
+    else:
+        # 无文件则清空文档内容
+        if "doc_content" in st.session_state:
+            del st.session_state["doc_content"]
+        st.info("请上传PDF/TXT文档，开启文档问答")
+
+    st.divider()
+    st.info("💡 切换人设/上传新文档后，请清空对话生效")
 
 # ========== 初始化对话记忆 ==========
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 每次切换人设，重置对话（把系统提示词放最前面）
-if st.sidebar.button("🗑️ 清空对话并应用新人设", type="primary", use_container_width=True):
+# 清空对话并应用配置
+if st.sidebar.button("🗑️ 清空对话并应用配置", type="primary", use_container_width=True):
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
     st.rerun()
 
-# 没有系统提示词就初始化
+# 初始化系统提示词
 if not st.session_state.messages:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
 
 # ========== 展示历史聊天 ==========
-for msg in st.session_state.messages[1:]:  # 跳过系统提示词不展示
+for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ========== 用户聊天输入 ==========
-user_input = st.chat_input("和专属AI助手聊天吧...")
+# ========== 用户聊天输入（支持普通对话 + 文档问答） ==========
+user_input = st.chat_input("普通聊天 / 提问文档内容...")
 
 if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # 拼接文档内容到提问中（有文档则开启知识库问答）
+    final_prompt = user_input
+    if "doc_content" in st.session_state and st.session_state["doc_content"]:
+        doc_info = "\n【参考文档内容】\n" + "\n".join(st.session_state["doc_content"][:3])
+        final_prompt = f"请结合以下文档内容回答问题：{user_input}{doc_info}"
+
+    st.session_state.messages.append({"role": "user", "content": final_prompt})
     with st.chat_message("user"):
         st.markdown(user_input)
 
@@ -83,7 +129,7 @@ if user_input:
     full_answer = ""
 
     with st.chat_message("assistant"):
-        with st.spinner("AI正在思考..."):
+        with st.spinner("AI正在分析回答..."):
             try:
                 data = {
                     "model": MODEL_NAME,
@@ -117,7 +163,7 @@ if user_input:
                     except json.JSONDecodeError:
                         continue
 
-                st.session_state.messages.append({"role": "assistant", "content": full_answer})
+                st.session_state.messages.append({"role": "assistant","content": full_answer})
                 st.success("✅ 回答完成！")
 
             except requests.exceptions.ConnectionError:
@@ -134,11 +180,6 @@ if user_input:
             except Exception as e:
                 st.error(f"❌ 程序出错：{str(e)}")
 
-# 底部提示
+# 底部说明
 st.divider()
-st.caption("✨ 智谱GLM‑4.5‑Flash｜支持人设切换｜多轮记忆｜流式输出")
-st.rerun()
-
-# 底部提示
-st.divider()
-st.caption("💡 提示：使用智谱AI glm-4.5-flash 模型，支持多轮上下文记忆+流式实时输出")
+st.caption("📄 智谱GLM‑4.5‑Flash | 人设切换 | PDF/TXT文档问答 | 多轮记忆 | 流式输出")
