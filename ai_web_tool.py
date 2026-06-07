@@ -137,7 +137,7 @@ if user_input:
 # 底部提示
 st.divider()
 st.caption("✨ 智谱GLM‑4.5‑Flash｜支持人设切换｜多轮记忆｜流式输出")
-    st.rerun()
+st.rerun()
 
 # 底部提示
 st.divider()
